@@ -10,8 +10,15 @@ import cv2
 import numpy as np
 import requests
 import time
+import sys
+import os
 from typing import Optional, Dict
 from datetime import datetime
+
+# Add parent directory to path for context_gathering import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from context_gathering import ContextAnalyzer
 from .config import *
 
 
@@ -24,6 +31,8 @@ class FrameProcessor:
         self.enable_cognitive = ENABLE_COGNITIVE_PROCESSING
         self.vlm_model = VLM_MODEL
         self.frame_count = 0
+        # Initialize context analyzer
+        self.context_analyzer = ContextAnalyzer()
         
     async def analyze_with_vlm(self, frame: np.ndarray) -> Optional[str]:
         """
@@ -146,7 +155,8 @@ class FrameProcessor:
     
     async def process_frame(self, metadata: Dict, frame: np.ndarray) -> Dict:
         """
-        Process a single frame: generate VLM description and send to cognitive layer.
+        Process a single frame using context gathering layer: analyze importance,
+        generate VLM description, and send to cognitive layer.
         
         Args:
             metadata: Frame metadata from camera server
@@ -161,74 +171,58 @@ class FrameProcessor:
         # Extract metadata
         frame_id = metadata.get("frame_id", f"frame_{self.frame_count}")
         timestamp = metadata.get("timestamp", time.time())
-        detections = metadata.get("detections", [])
-        motion_score = metadata.get("motion_score", 0.0)
         
-        # Extract detected objects
-        detected_objects = self.extract_detected_objects(detections)
+        # Use context gathering layer to analyze frame
+        print(f"[FrameProcessor] Gathering context for frame {frame_id}...")
+        context_start = time.time()
         
-        # Generate VLM description
-        print(f"[FrameProcessor] Processing frame {frame_id}...")
-        vlm_start = time.time()
-        vlm_description = await self.analyze_with_vlm(frame)
-        vlm_time = time.time() - vlm_start
-        
-        if not vlm_description:
-            print(f"[FrameProcessor] ⚠️ No VLM description for frame {frame_id}")
+        try:
+            # Gather comprehensive context
+            context_data = await self.context_analyzer.gather_context(
+                frame=frame,
+                metadata=metadata
+            )
+            context_time = time.time() - context_start
+            
+            print(f"[FrameProcessor] ✓ Context gathered ({context_time:.2f}s)")
+            print(f"  Importance: {context_data['metadata']['importance_score']:.3f}")
+            print(f"  Reasoning: {context_data['metadata']['importance_reasoning'][:80]}...")
+            
+            # Send to cognitive layer
+            cognitive_result = None
+            if self.enable_cognitive:
+                cognitive_start = time.time()
+                cognitive_result = await self.send_to_cognitive_layer(context_data)
+                cognitive_time = time.time() - cognitive_start
+                
+                if cognitive_result:
+                    importance = cognitive_result.get("importance", 0.0)
+                    added = cognitive_result.get("added_to_graph", False)
+                    print(f"[FrameProcessor] ✓ Cognitive layer: importance={importance:.3f}, "
+                          f"added_to_graph={added} ({cognitive_time:.2f}s)")
+                else:
+                    print(f"[FrameProcessor] ⚠️ Cognitive layer processing failed")
+            
+            total_time = time.time() - processing_start
+            
+            return {
+                "status": "processed",
+                "frame_id": frame_id,
+                "context_data": context_data,
+                "cognitive_result": cognitive_result,
+                "processing_time": total_time,
+                "context_time": context_time,
+            }
+            
+        except Exception as e:
+            print(f"[FrameProcessor] Error processing frame: {e}")
+            import traceback
+            traceback.print_exc()
             return {
                 "status": "error",
                 "frame_id": frame_id,
-                "error": "VLM analysis failed"
+                "error": str(e)
             }
-        
-        print(f"[FrameProcessor] ✓ VLM analysis ({vlm_time:.2f}s): {vlm_description[:100]}...")
-        
-        # Extract actions from description
-        detected_actions = self.extract_detected_actions(detections, vlm_description)
-        
-        # Prepare event data for cognitive layer
-        event_data = {
-            "frame_id": frame_id,
-            "timestamp": datetime.fromtimestamp(timestamp).isoformat(),
-            "description": vlm_description,
-            "detected_objects": detected_objects,
-            "detected_actions": detected_actions,
-            "motion_score": motion_score,
-            "detection_count": len(detections),
-            "source": "camera_frame",
-            "metadata": {
-                "vlm_model": self.vlm_model,
-                "vlm_processing_time": vlm_time,
-                "yolo_detections": detections,
-            }
-        }
-        
-        # Send to cognitive layer
-        cognitive_result = None
-        if self.enable_cognitive:
-            cognitive_start = time.time()
-            cognitive_result = await self.send_to_cognitive_layer(event_data)
-            cognitive_time = time.time() - cognitive_start
-            
-            if cognitive_result:
-                importance = cognitive_result.get("importance", 0.0)
-                added = cognitive_result.get("added_to_graph", False)
-                print(f"[FrameProcessor] ✓ Cognitive layer: importance={importance:.3f}, "
-                      f"added_to_graph={added} ({cognitive_time:.2f}s)")
-            else:
-                print(f"[FrameProcessor] ⚠️ Cognitive layer processing failed")
-        
-        total_time = time.time() - processing_start
-        
-        return {
-            "status": "processed",
-            "frame_id": frame_id,
-            "vlm_description": vlm_description,
-            "detected_objects": detected_objects,
-            "detected_actions": detected_actions,
-            "cognitive_result": cognitive_result,
-            "processing_time": total_time,
-        }
     
     async def listen_and_process(self):
         """Main loop: connect to camera server and process incoming frames"""
