@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDEN Cognitive Layer - Ego Engine Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #000010;
+            color: #ffffff;
+            overflow: hidden;
+        }
+        
+        #graph-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        
+        #god-mode-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 350px;
+            background: rgba(20, 20, 40, 0.95);
+            border: 2px solid #4a90e2;
+            border-radius: 10px;
+            padding: 20px;
+            z-index: 1000;
+            box-shadow: 0 0 30px rgba(74, 144, 226, 0.5);
+        }
+        
+        #god-mode-panel h2 {
+            color: #4a90e2;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 24px;
+            text-shadow: 0 0 10px rgba(74, 144, 226, 0.8);
+        }
+        
+        .trait-control {
+            margin-bottom: 20px;
+        }
+        
+        .trait-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: #b0b0b0;
+        }
+        
+        .trait-name {
+            font-weight: bold;
+            color: #ffffff;
+        }
+        
+        .trait-value {
+            color: #4a90e2;
+            font-weight: bold;
+        }
+        
+        .slider {
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: #1a1a2e;
+            outline: none;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4a90e2;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(74, 144, 226, 0.8);
+        }
+        
+        .slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4a90e2;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 0 10px rgba(74, 144, 226, 0.8);
+        }
+        
+        .event-buttons {
+            margin-top: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .event-button {
+            padding: 12px;
+            border: 2px solid;
+            border-radius: 5px;
+            background: transparent;
+            color: #ffffff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+        
+        .event-button.trauma {
+            border-color: #e74c3c;
+            color: #e74c3c;
+        }
+        
+        .event-button.trauma:hover {
+            background: rgba(231, 76, 60, 0.2);
+            box-shadow: 0 0 15px rgba(231, 76, 60, 0.5);
+        }
+        
+        .event-button.kindness {
+            border-color: #2ecc71;
+            color: #2ecc71;
+        }
+        
+        .event-button.kindness:hover {
+            background: rgba(46, 204, 113, 0.2);
+            box-shadow: 0 0 15px rgba(46, 204, 113, 0.5);
+        }
+        
+        .status-indicator {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(20, 20, 40, 0.95);
+            border: 2px solid #4a90e2;
+            border-radius: 10px;
+            padding: 15px;
+            z-index: 1000;
+            min-width: 300px;
+        }
+        
+        .status-indicator h3 {
+            color: #4a90e2;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .status-item {
+            margin: 5px 0;
+            font-size: 12px;
+            color: #b0b0b0;
+        }
+        
+        .status-value {
+            color: #4a90e2;
+            font-weight: bold;
+        }
+        
+        .pulsing {
+            animation: pulse 1s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+    <script src="https://unpkg.com/3d-force-graph@1/dist/3d-force-graph.min.js"></script>
+</head>
+<body>
+    <div id="graph-container"></div>
+    
+    <div id="god-mode-panel">
+        <h2>⚡ GOD MODE ⚡</h2>
+        
+        <div class="trait-control">
+            <div class="trait-label">
+                <span class="trait-name">Openness</span>
+                <span class="trait-value" id="openness-value">0.50</span>
+            </div>
+            <input type="range" min="0" max="1" step="0.01" value="0.5" 
+                   class="slider" id="openness-slider" data-trait="Openness">
+        </div>
+        
+        <div class="trait-control">
+            <div class="trait-label">
+                <span class="trait-name">Conscientiousness</span>
+                <span class="trait-value" id="conscientiousness-value">0.50</span>
+            </div>
+            <input type="range" min="0" max="1" step="0.01" value="0.5" 
+                   class="slider" id="conscientiousness-slider" data-trait="Conscientiousness">
+        </div>
+        
+        <div class="trait-control">
+            <div class="trait-label">
+                <span class="trait-name">Extroversion</span>
+                <span class="trait-value" id="extroversion-value">0.50</span>
+            </div>
+            <input type="range" min="0" max="1" step="0.01" value="0.5" 
+                   class="slider" id="extroversion-slider" data-trait="Extroversion">
+        </div>
+        
+        <div class="trait-control">
+            <div class="trait-label">
+                <span class="trait-name">Agreeableness (Kindness)</span>
+                <span class="trait-value" id="agreeableness-value">0.50</span>
+            </div>
+            <input type="range" min="0" max="1" step="0.01" value="0.5" 
+                   class="slider" id="agreeableness-slider" data-trait="Agreeableness">
+        </div>
+        
+        <div class="trait-control">
+            <div class="trait-label">
+                <span class="trait-name">Neuroticism (Anxiety)</span>
+                <span class="trait-value" id="neuroticism-value">0.50</span>
+            </div>
+            <input type="range" min="0" max="1" step="0.01" value="0.5" 
+                   class="slider" id="neuroticism-slider" data-trait="Neuroticism">
+        </div>
+        
+        <div class="event-buttons">
+            <button class="event-button trauma" id="inject-trauma-btn">
+                ⚠️ Inject Trauma (John throws can)
+            </button>
+            <button class="event-button kindness" id="inject-kindness-btn">
+                ✨ Inject Kindness (Student high-five)
+            </button>
+        </div>
+    </div>
+    
+    <div class="status-indicator">
+        <h3>🧠 EDEN Status</h3>
+        <div class="status-item">Nodes: <span class="status-value" id="node-count">0</span></div>
+        <div class="status-item">Edges: <span class="status-value" id="edge-count">0</span></div>
+        <div class="status-item">State: <span class="status-value" id="current-state">Initializing...</span></div>
+    </div>
+    
+    <script>
+        // Initialize 3D Force Graph
+        const Graph = ForceGraph3D();
+        const container = document.getElementById('graph-container');
+        
+        let graphData = { nodes: [], links: [] };
+        let personalityState = {
+            Openness: 0.5,
+            Conscientiousness: 0.5,
+            Extroversion: 0.5,
+            Agreeableness: 0.5,
+            Neuroticism: 0.5
+        };
+        
+        // Initialize graph
+        Graph(container)
+            .graphData(graphData)
+            .nodeLabel(node => {
+                if (node.id === 'SELF') {
+                    return 'SELF (Ego)';
+                }
+                return node.content || node.id;
+            })
+            .nodeColor(node => {
+                if (node.id === 'SELF') {
+                    // Color based on personality
+                    const agg = personalityState.Agreeableness || 0.5;
+                    const neu = personalityState.Neuroticism || 0.5;
+                    
+                    // High aggression (low agreeableness) = red
+                    // High kindness (high agreeableness) = blue/green
+                    // High neuroticism = darker/more intense
+                    
+                    if (neu > 0.7) {
+                        return `rgb(${255}, ${Math.floor(100 * (1 - agg))}, ${Math.floor(100 * (1 - agg))})`;
+                    } else {
+                        return `rgb(${Math.floor(100 * (1 - agg))}, ${Math.floor(150 + 105 * agg)}, ${Math.floor(200 + 55 * agg)})`;
+                    }
+                }
+                
+                // Memory nodes
+                if (node.type === 'threat' || node.type === 'trauma') {
+                    return '#e74c3c'; // Red
+                }
+                if (node.type === 'joy') {
+                    return '#2ecc71'; // Green
+                }
+                if (node.type === 'user') {
+                    return '#f39c12'; // Orange
+                }
+                return '#3498db'; // Blue
+            })
+            .nodeRelSize(6)
+            .nodeVal(node => {
+                return node.size || 10;
+            })
+            .linkColor(() => 'rgba(74, 144, 226, 0.3)')
+            .linkWidth(link => link.weight || 1)
+            .linkDirectionalArrowLength(3)
+            .linkDirectionalArrowRelPos(1)
+            .linkCurvature(0.25)
+            .backgroundColor('#000010')
+            .showNavInfo(false)
+            .onNodeHover(node => {
+                container.style.cursor = node ? 'pointer' : null;
+            })
+            .onNodeClick(node => {
+                if (node.id === 'SELF') {
+                    console.log('SELF Node clicked:', personalityState);
+                } else {
+                    console.log('Node clicked:', node);
+                }
+            });
+        
+        // WebSocket connection
+        let wsUrl;
+        if (window.location.protocol === 'file:') {
+            // If opened as file, connect to default server
+            wsUrl = 'ws://localhost:8000/ws';
+        } else {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsHost = window.location.hostname || 'localhost';
+            const wsPort = window.location.port || '8000';
+            wsUrl = `${wsProtocol}//${wsHost}:${wsPort}/ws`;
+        }
+        const socket = new WebSocket(wsUrl);
+        
+        socket.onopen = () => {
+            console.log('Connected to EDEN Brain Server');
+            updateStatus('Connected', 'connected');
+        };
+        
+        socket.onclose = () => {
+            console.log('Disconnected from EDEN Brain Server');
+            updateStatus('Disconnected', 'disconnected');
+            // Attempt to reconnect after 3 seconds
+            setTimeout(() => {
+                location.reload();
+            }, 3000);
+        };
+        
+        socket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            updateStatus('Connection Error', 'error');
+        };
+        
+        socket.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                console.log('Message received:', message);
+                
+                switch(message.type) {
+                    case 'initial_state':
+                        updateGraph(message.data);
+                        break;
+                    case 'personality_update':
+                        if (message.data && message.data.personality) {
+                            updatePersonalitySliders(message.data.personality);
+                            updateGraph(message.data.graph_state);
+                        }
+                        break;
+                    case 'interaction':
+                        if (message.data && message.data.graph_state) {
+                            updateGraph(message.data.graph_state);
+                        }
+                        break;
+                    case 'event_injected':
+                        if (message.data && message.data.graph_state) {
+                            updateGraph(message.data.graph_state);
+                            if (message.data.personality) {
+                                updatePersonalitySliders(message.data.personality);
+                            }
+                            
+                            // Visual feedback
+                            if (message.event_type === 'trauma') {
+                                pulseSelfNode();
+                            }
+                        }
+                        break;
+                    case 'pong':
+                        // Keep-alive response
+                        break;
+                    case 'event_processed':
+                        if (message.data && message.data.graph_state) {
+                            updateGraph(message.data.graph_state);
+                            console.log('Event processed:', message.data);
+                            updateStatus(`Event processed: ${message.data.importance?.toFixed(2)}`, 'event');
+                        }
+                        break;
+                    case 'batch_processed':
+                        if (message.data && message.data.graph_state) {
+                            updateGraph(message.data.graph_state);
+                            console.log('Batch processed:', message.data);
+                            updateStatus(`Batch: ${message.data.added_to_graph} added`, 'batch');
+                        }
+                        break;
+                }
+            } catch (error) {
+                console.error('Error parsing WebSocket message:', error);
+            }
+        };
+        
+        // Update graph visualization
+        function updateGraph(graphState) {
+            if (!graphState || !graphState.nodes) return;
+            
+            graphData.nodes = graphState.nodes.map(node => ({
+                ...node,
+                x: node.id === 'SELF' ? 0 : undefined,
+                y: node.id === 'SELF' ? 0 : undefined,
+                z: node.id === 'SELF' ? 0 : undefined
+            }));
+            
+            graphData.links = graphState.links.map(link => ({
+                ...link,
+                source: link.source,
+                target: link.target
+            }));
+            
+            if (graphState.personality) {
+                personalityState = graphState.personality;
+            }
+            
+            Graph.graphData(graphData);
+            
+            // Update status
+            document.getElementById('node-count').textContent = graphData.nodes.length;
+            document.getElementById('edge-count').textContent = graphData.links.length;
+        }
+        
+        // Update personality sliders (without triggering API calls)
+        function updatePersonalitySliders(personality) {
+            const traits = ['Openness', 'Conscientiousness', 'Extroversion', 'Agreeableness', 'Neuroticism'];
+            traits.forEach(trait => {
+                const slider = document.getElementById(`${trait.toLowerCase()}-slider`);
+                const valueDisplay = document.getElementById(`${trait.toLowerCase()}-value`);
+                if (slider && valueDisplay && personality[trait] !== undefined) {
+                    slider.value = personality[trait];
+                    valueDisplay.textContent = personality[trait].toFixed(2);
+                }
+            });
+            personalityState = personality;
+        }
+        
+        // Personality slider handlers
+        const sliders = document.querySelectorAll('.slider');
+        let sliderTimeout;
+        
+        sliders.forEach(slider => {
+            slider.addEventListener('input', (e) => {
+                const trait = e.target.dataset.trait;
+                const value = parseFloat(e.target.value);
+                const valueDisplay = document.getElementById(`${trait.toLowerCase()}-value`);
+                
+                if (valueDisplay) {
+                    valueDisplay.textContent = value.toFixed(2);
+                }
+                
+                // Debounce API calls
+                clearTimeout(sliderTimeout);
+                sliderTimeout = setTimeout(() => {
+                    updatePersonality(trait, value);
+                }, 100);
+            });
+        });
+        
+        // Update personality via API
+        async function updatePersonality(trait, value) {
+            try {
+                const response = await fetch('/api/god_mode/set_personality', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ trait, value })
+                });
+                const result = await response.json();
+                console.log('Personality updated:', result);
+            } catch (error) {
+                console.error('Error updating personality:', error);
+            }
+        }
+        
+        // Event injection buttons
+        document.getElementById('inject-trauma-btn').addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/event/inject', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        event_type: 'trauma',
+                        description: 'John throws can at robot - sudden aggressive movement detected'
+                    })
+                });
+                const result = await response.json();
+                console.log('Trauma injected:', result);
+                updateStatus('Trauma Injected', 'trauma');
+            } catch (error) {
+                console.error('Error injecting trauma:', error);
+            }
+        });
+        
+        document.getElementById('inject-kindness-btn').addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/event/inject', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        event_type: 'kindness',
+                        description: 'Student gives friendly high-five - positive interaction'
+                    })
+                });
+                const result = await response.json();
+                console.log('Kindness injected:', result);
+                updateStatus('Kindness Injected', 'kindness');
+            } catch (error) {
+                console.error('Error injecting kindness:', error);
+            }
+        });
+        
+        // Status update
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById('current-state');
+            statusEl.textContent = message;
+            statusEl.className = `status-value ${type}`;
+        }
+        
+        // Pulse animation for SELF node during trauma
+        function pulseSelfNode() {
+            const selfNode = graphData.nodes.find(n => n.id === 'SELF');
+            if (selfNode) {
+                // The graph will automatically update colors based on personality
+                // We can add visual feedback here if needed
+            }
+        }
+        
+        // Keep connection alive
+        setInterval(() => {
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
+
