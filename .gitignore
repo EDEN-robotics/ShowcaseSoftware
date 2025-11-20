@@ -60,3 +60,10 @@ htmlcov/
 # Local configuration overrides
 config.local.py
 
+# Model files (too large for git)
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+

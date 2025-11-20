@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 import json
 import asyncio
+import uuid
 from cognitive_layer.ego_core import EgoGraph
 
 app = FastAPI(title="EDEN Cognitive Layer API")
@@ -276,6 +277,87 @@ async def update_event_config(config_update: Dict):
     }
 
 
+class PlanRequest(BaseModel):
+    goal: str
+    user_context: Optional[str] = None
+
+@app.post("/api/plan/request")
+async def request_plan(request: PlanRequest):
+    """Request a plan from the planning layer using cognitive layer context"""
+    import requests
+    
+    # Get relevant memories from cognitive layer
+    memories = ego_graph.memory_engine.retrieve_relevant_memories(
+        query=request.goal,
+        user_context=request.user_context,
+        top_k=10
+    )
+    
+    # Build scene description from memories
+    scene_parts = []
+    for mem in memories[:5]:  # Use top 5 memories
+        if hasattr(mem, 'content'):
+            scene_parts.append(mem.content)
+        elif isinstance(mem, dict):
+            scene_parts.append(mem.get('content', ''))
+    
+    scene_description = ". ".join(scene_parts) if scene_parts else "Standard environment"
+    
+    # Call planning layer
+    try:
+        planning_response = requests.post(
+            "http://localhost:8001/api/plan/generate",
+            json={
+                "goal": request.goal,
+                "scene_description": scene_description
+            },
+            timeout=90  # Increased timeout for Ollama inference
+        )
+        
+        if planning_response.status_code == 200:
+            plan_data = planning_response.json()
+            
+            # Store planning result as memory
+            from cognitive_layer.ego_core import MemoryNode
+            plan_memory = MemoryNode(
+                id=f"plan_{uuid.uuid4().hex[:8]}",
+                content=f"Generated plan for goal: {request.goal}. Plan: {plan_data.get('plan', 'N/A')}",
+                importance=0.7,
+                user_context=request.user_context,
+                node_type="achievement"
+            )
+            ego_graph.add_memory_node(plan_memory)
+            
+            # Broadcast update
+            await manager.broadcast({
+                "type": "plan_generated",
+                "data": {
+                    "goal": request.goal,
+                    "plan": plan_data
+                }
+            })
+            
+            return {
+                "status": "success",
+                "goal": request.goal,
+                "scene_description": scene_description,
+                "plan": plan_data,
+                "memories_used": len(memories)
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Planning layer returned {planning_response.status_code}",
+                "details": planning_response.text
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "message": "Planning layer unavailable",
+            "error": str(e)
+        }
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time graph updates"""
@@ -305,18 +387,72 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.on_event("startup")
 async def startup_event():
     """Initialize demo data on startup"""
-    # Add some initial demo memories
-    from cognitive_layer.ego_core import MemoryNode
+    import os
     
-    # Add a user node for demo
-    demo_memory = MemoryNode(
-        id="demo_001",
-        content="Initial system state: EDEN is ready to interact",
-        importance=0.3,
-        user_context=None,
-        node_type="memory"
-    )
-    ego_graph.add_memory_node(demo_memory)
+    # Check if we should populate with test data
+    populate_test_data = os.getenv("POPULATE_TEST_DATA", "false").lower() == "true"
+    
+    if populate_test_data:
+        print("Populating cognitive layer with test knowledge graph...")
+        from planning_layer.test_knowledge_graph import TestKnowledgeGraphGenerator
+        
+        generator = TestKnowledgeGraphGenerator(ego_graph)
+        stats = generator.generate_house_environment()
+        
+        # Add user-specific memories
+        users = ["Ian", "Student", "Judge", "Dr. Smith"]
+        from cognitive_layer.ego_core import MemoryNode
+        
+        for user in users:
+            user_memory = MemoryNode(
+                id=f"user_{user.lower()}_001",
+                content=f"{user} is a frequent visitor. They often interact with the robot.",
+                importance=0.7,
+                user_context=user,
+                node_type="memory"
+            )
+            ego_graph.add_memory_node(user_memory)
+        
+        # Add interaction memories
+        interactions = [
+            MemoryNode(
+                id="interaction_001",
+                content="Ian asked the robot to pick up the red cup from the kitchen counter. The robot successfully completed this task.",
+                importance=0.8,
+                user_context="Ian",
+                node_type="achievement"
+            ),
+            MemoryNode(
+                id="interaction_002",
+                content="Student gave friendly high-five in the living room. Positive interaction.",
+                importance=0.7,
+                user_context="Student",
+                node_type="joy"
+            ),
+            MemoryNode(
+                id="interaction_003",
+                content="Judge observed the robot's cognitive capabilities during demonstration.",
+                importance=0.9,
+                user_context="Judge",
+                node_type="memory"
+            ),
+        ]
+        
+        for interaction in interactions:
+            ego_graph.add_memory_node(interaction)
+        
+        print(f"✓ Test knowledge graph populated: {stats['total_nodes']} nodes, {stats['total_edges']} edges")
+    else:
+        # Minimal demo memory
+        from cognitive_layer.ego_core import MemoryNode
+        demo_memory = MemoryNode(
+            id="demo_001",
+            content="Initial system state: EDEN is ready to interact",
+            importance=0.3,
+            user_context=None,
+            node_type="memory"
+        )
+        ego_graph.add_memory_node(demo_memory)
     
     print("EDEN Cognitive Layer initialized")
     print(f"Graph nodes: {ego_graph.graph.number_of_nodes()}")
