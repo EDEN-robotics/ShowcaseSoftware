@@ -5,12 +5,14 @@ Implements the Self-Modulating Knowledge Graph with Personality-Based Perception
 
 import networkx as nx
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
 import chromadb
 from chromadb.config import Settings
 import json
 import uuid
+import re
+import requests
 from datetime import datetime
 from cognitive_layer import config
 from cognitive_layer.llm_analyzer import CognitiveAnalyzer, LLMAnalysisResult
@@ -376,39 +378,535 @@ class EgoGraph:
         }
     
     def process_interaction(self, user: str, action: str) -> Dict:
-        """Process an interaction: filter perception and generate response"""
-        # Filter perception
-        perception = self.filter_perception(action, user_context=user)
+        """Process an interaction: filter perception, detect planning needs, generate response and plan if needed"""
         
-        # Create memory node for this interaction
+        # 1. Extract user info and update context
+        extracted_user_info = self._extract_user_info(action, user)
+        current_user_name = user
+        
+        # If user info detected, handle node creation/context update
+        if extracted_user_info:
+            if extracted_user_info.get("name"):
+                current_user_name = extracted_user_info["name"]
+                self._create_user_node(current_user_name, extracted_user_info.get("info"))
+        # If user is generic "User" but we have a known user from previous interactions, check if they're still talking
+        elif user == "User":
+            # Check if action mentions a different person explicitly
+            different_person = self._check_for_different_person(action)
+            if different_person:
+                # Switch to that person if mentioned
+                current_user_name = different_person
+            # Otherwise, keep using the last known user if available
+            # (This would require session tracking - for now, rely on frontend sending the name)
+        
+        # 2. Filter perception with updated user context
+        perception = self.filter_perception(action, user_context=current_user_name)
+        
+        # 3. Retrieve relevant memories for context
+        # Search with original action plus user-specific context
+        search_query = f"{action} {current_user_name}"
+        relevant_memories = self.memory_engine.retrieve_relevant_memories(
+            search_query,
+            user_context=current_user_name,
+            top_k=10
+        )
+        
+        # Add user node info if available to memories
+        if current_user_name != "User":
+            # Try to find user node to add context
+            try:
+                # Assuming user node ID format
+                user_node_id = f"user_{current_user_name.lower().replace(' ', '_')}"
+                if self.graph.has_node(user_node_id):
+                    user_data = self.graph.nodes[user_node_id]
+                    user_memory = MemoryNode(
+                        id=user_node_id,
+                        content=f"User Information: {user_data.get('content', '')}",
+                        importance=0.9,
+                        user_context=current_user_name,
+                        node_type="user"
+                    )
+                    relevant_memories.insert(0, user_memory)
+            except:
+                pass
+        
+        # 4. Detect if planning is needed using LLM
+        planning_need = self._detect_planning_need(action, current_user_name, relevant_memories, perception)
+        
+        # 5. Make decision before planning
+        decision = None
+        plan = None
+        if planning_need["needs_planning"]:
+            decision = self._make_decision(action, current_user_name, relevant_memories, perception, planning_need)
+            
+            # If decision is to proceed, generate plan
+            if decision.get("proceed", False):
+                # Generate plan (this may take time)
+                plan = self._generate_plan(action, current_user_name, relevant_memories, None)
+        
+        # 6. Create memory node for this interaction
         importance = 0.5  # Default importance
         if perception["decision"] == "reject":
             importance = 0.7  # Rejections are more memorable
+        if planning_need["needs_planning"]:
+            importance = 0.6  # Planning requests are more important
+        
+        # Cleaner memory content without "User User asked:"
+        memory_content = f"{current_user_name} said: {action}"
+        if plan:
+            memory_content += f" | Plan generated: {len(plan.get('actions', []))} actions"
         
         memory = MemoryNode(
             id=str(uuid.uuid4()),
-            content=f"User {user} performed action: {action}. Filtered as: {perception['filtered_intent']}",
+            content=memory_content,
             importance=importance,
-            user_context=user,
-            node_type="memory"
+            user_context=current_user_name,
+            node_type="memory" if not plan else "achievement"
         )
         
         memory_id = self.add_memory_node(memory)
+        memory_added = {
+            "id": memory_id,
+            "content": memory.content,
+            "importance": importance,
+            "user_context": current_user_name
+        }
         
-        # Generate response based on decision
-        if perception["decision"] == "accept":
-            response = f"I understand. {action} noted."
-        elif perception["decision"] == "reject":
-            response = f"I'm not comfortable with that right now."
-        else:
-            response = f"I'm cautious about {action}."
+        # 7. Generate LLM response
+        response_text = self._generate_llm_response(
+            action=action,
+            user=current_user_name,
+            extracted_name=None,
+            all_memories=relevant_memories,
+            perception=perception,
+            has_plan=plan is not None
+        )
         
         return {
             "thought_trace": perception,
-            "response": response,
+            "response": response_text,
+            "decision": decision,
+            "plan": plan,
+            "memory_added": memory_added,
             "memory_id": memory_id,
+            "memories_used": len(relevant_memories),
             "graph_state": self.get_graph_state()
         }
+    
+    def _extract_user_info(self, text: str, current_user: str) -> Optional[Dict]:
+        """Extract user name and info from text using fast heuristics + minimal LLM"""
+        import requests
+        from cognitive_layer import config
+        
+        # Fast heuristic extraction first (no LLM needed)
+        text_lower = text.lower()
+        intro_keywords = ["my name is", "i am", "i'm", "call me", "this is"]
+        
+        if not any(kw in text_lower for kw in intro_keywords) and current_user != "User":
+            return None
+        
+        # Try regex extraction first (much faster than LLM)
+        name_patterns = [
+            r'(?:my name is|i am|i\'m|call me|this is)\s+([A-Z][a-z]+)',
+            r'^([A-Z][a-z]+)\s+(?:here|speaking)',
+        ]
+        
+        extracted_name = None
+        for pattern in name_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                extracted_name = match.group(1)
+                break
+        
+        # Extract info (student, freshman, etc.)
+        info_keywords = {
+            "student": ["student", "freshman", "sophomore", "junior", "senior"],
+            "new": ["new", "just arrived", "first time"],
+            "lab": ["lab", "research", "robotics"]
+        }
+        extracted_info = None
+        for info_type, keywords in info_keywords.items():
+            if any(kw in text_lower for kw in keywords):
+                extracted_info = info_type
+                break
+        
+        # If we found a name via regex, return immediately (no LLM needed)
+        if extracted_name:
+            return {
+                "detected": True,
+                "name": extracted_name,
+                "info": extracted_info
+            }
+        
+        # Only use LLM if regex failed (fallback)
+        prompt = f"""Extract name from: "{text[:80]}"
+JSON only: {{"detected": true/false, "name": "name or null", "info": "info or null"}}"""
+
+        try:
+            ollama_url = f"{config.OLLAMA_BASE_URL}/api/generate"
+            response = requests.post(
+                ollama_url,
+                json={
+                    "model": config.DEFAULT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_predict": 50  # Reduced from 100
+                    }
+                },
+                timeout=10  # Reduced timeout
+            )
+            
+            if response.status_code == 200:
+                result_text = response.json().get("response", "")
+                json_start = result_text.find("{")
+                json_end = result_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    data = json.loads(result_text[json_start:json_end])
+                    if data.get("detected") and data.get("name"):
+                        return data
+            return None
+        except Exception as e:
+            print(f"[EgoGraph] User info extraction error: {e}")
+            return None
+
+    def _check_for_different_person(self, text: str) -> Optional[str]:
+        """Check if text mentions a different person by name"""
+        # Simple pattern matching for names
+        # Look for patterns like "I am [Name]", "This is [Name]", "[Name] said", etc.
+        patterns = [
+            r'\b(I am|I\'m|My name is|This is|Call me)\s+([A-Z][a-z]+)',
+            r'\b([A-Z][a-z]+)\s+(said|told|asked|wants)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                # Extract the name (usually the capitalized word)
+                name = match.group(2) if len(match.groups()) > 1 else match.group(1)
+                if name and name not in ['User', 'Ian', 'Vedant']:  # Add known names to avoid false positives
+                    return name
+        
+        return None
+
+    def _create_user_node(self, name: str, info: str = None):
+        """Create a persistent node for a user"""
+        user_id = f"user_{name.lower().replace(' ', '_')}"
+        
+        if self.graph.has_node(user_id):
+            # Update existing user info if new info provided
+            if info:
+                old_content = self.graph.nodes[user_id].get("content", "")
+                if info not in old_content:
+                    new_content = f"{old_content}. {info}".strip(". ")
+                    self.graph.nodes[user_id]["content"] = new_content
+            return
+
+        # Create new user node
+        content = f"User: {name}"
+        if info:
+            content += f". {info}"
+            
+        self.graph.add_node(user_id, 
+                           node_type="user",
+                           content=content,
+                           importance=0.8,
+                           size=25,
+                           timestamp=datetime.now().isoformat())
+        
+        # Link to SELF
+        self.graph.add_edge("SELF", user_id, weight=0.5, edge_type="knows")
+        print(f"[EgoGraph] Created new user node: {name}")
+
+    def _detect_planning_need(self, action: str, user: str, relevant_memories: list, perception: Dict) -> Dict:
+        """Use fast heuristics + minimal LLM to detect if user input requires action planning"""
+        import requests
+        from cognitive_layer import config
+        
+        # Fast heuristic check first (no LLM needed)
+        action_lower = action.lower()
+        action_keywords = ['pick up', 'move', 'bring', 'get', 'navigate', 'go to', 'transport', 
+                          'place', 'put', 'grab', 'lift', 'carry', 'deliver', 'fetch', 'retrieve', 
+                          'organize', 'clean', 'arrange', 'water', 'cup', 'grab me']
+        
+        needs_planning_heuristic = any(keyword in action_lower for keyword in action_keywords)
+        
+        # If no action keywords, return immediately (no LLM needed)
+        if not needs_planning_heuristic:
+            return {
+                "needs_planning": False,
+                "reasoning": "No action keywords detected",
+                "action_type": None
+            }
+        
+        # Only use LLM for ambiguous cases (shorter prompt)
+        prompt = f"""Does "{action[:60]}" need robot physical actions? JSON: {{"needs_planning": true/false, "reasoning": "brief", "action_type": "type or null"}}"""
+
+        try:
+            ollama_url = f"{config.OLLAMA_BASE_URL}/api/generate"
+            response = requests.post(
+                ollama_url,
+                json={
+                    "model": config.DEFAULT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.2,
+                        "num_predict": 80  # Reduced from 200
+                    }
+                },
+                timeout=10  # Reduced timeout
+            )
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                result_text = response_data.get("response", "")
+                
+                # Extract JSON
+                json_start = result_text.find("{")
+                json_end = result_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    json_text = result_text[json_start:json_end]
+                    result = json.loads(json_text)
+                    return {
+                        "needs_planning": result.get("needs_planning", False),
+                        "reasoning": result.get("reasoning", ""),
+                        "action_type": result.get("action_type")
+                    }
+            
+            # Fallback: heuristic detection
+            action_keywords = ['pick up', 'move', 'bring', 'get', 'navigate', 'go to', 'transport', 'place', 'put', 'grab', 'lift', 'carry', 'deliver', 'fetch', 'retrieve', 'organize', 'clean', 'arrange']
+            needs_planning = any(keyword in action.lower() for keyword in action_keywords)
+            return {
+                "needs_planning": needs_planning,
+                "reasoning": "Detected action keywords" if needs_planning else "No action keywords detected",
+                "action_type": None
+            }
+        except Exception as e:
+            print(f"[EgoGraph] Error detecting planning need: {e}")
+            # Fallback heuristic
+            action_keywords = ['pick up', 'move', 'bring', 'get', 'navigate', 'go to', 'transport', 'place', 'put', 'grab', 'lift', 'carry']
+            needs_planning = any(keyword in action.lower() for keyword in action_keywords)
+            return {
+                "needs_planning": needs_planning,
+                "reasoning": "Fallback detection",
+                "action_type": None
+            }
+    
+    def _make_decision(self, action: str, user: str, relevant_memories: list, perception: Dict, planning_need: Dict) -> Dict:
+        """Make decision about whether to proceed with planning based on personality and context"""
+        import requests
+        from cognitive_layer import config
+        
+        # Check if perception filter rejected it
+        if perception["decision"] == "reject":
+            return {
+                "proceed": False,
+                "reasoning": f"I'm not comfortable with that right now. {perception.get('filtered_intent', '')}",
+                "confidence": perception.get("confidence", 0.8)
+            }
+        
+        # Build memory context
+        memory_context = ""
+        if relevant_memories:
+            memory_context = "\nRelevant Memories:\n"
+            for mem in relevant_memories[:3]:
+                mem_content = mem.content[:100] if hasattr(mem, 'content') else str(mem.get('content', ''))[:100]
+                memory_context += f"- {mem_content}\n"
+        
+        personality_desc = f"""Personality:
+- Agreeableness: {self.personality.Agreeableness:.2f} (kindness, cooperation)
+- Neuroticism: {self.personality.Neuroticism:.2f} (anxiety, caution)
+- Conscientiousness: {self.personality.Conscientiousness:.2f} (organization, reliability)
+"""
+        
+        # Fast decision: if perception rejected, don't use LLM
+        if perception["decision"] == "reject":
+            return {
+                "proceed": False,
+                "reasoning": f"I'm not comfortable with that right now. {perception.get('filtered_intent', '')}",
+                "confidence": perception.get("confidence", 0.8)
+            }
+        
+        # Default to proceed for safe requests (skip LLM for common cases)
+        safe_keywords = ['water', 'cup', 'get', 'bring', 'grab']
+        if any(kw in action.lower() for kw in safe_keywords) and self.personality.Agreeableness > 0.5:
+            return {
+                "proceed": True,
+                "reasoning": "I'll help you with that.",
+                "confidence": 0.8
+            }
+        
+        # Only use LLM for complex decisions
+        prompt = f"""EDEN robot deciding: "{action[:60]}"
+Personality: Agreeableness={self.personality.Agreeableness:.2f}, Neuroticism={self.personality.Neuroticism:.2f}
+JSON: {{"proceed": true/false, "reasoning": "brief", "confidence": 0.0-1.0}}"""
+
+        try:
+            ollama_url = f"{config.OLLAMA_BASE_URL}/api/generate"
+            response = requests.post(
+                ollama_url,
+                json={
+                    "model": config.DEFAULT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.3,
+                        "num_predict": 100  # Reduced from 200
+                    }
+                },
+                timeout=10  # Reduced timeout
+            )
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                result_text = response_data.get("response", "")
+                
+                # Extract JSON
+                json_start = result_text.find("{")
+                json_end = result_text.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    json_text = result_text[json_start:json_end]
+                    result = json.loads(json_text)
+                    return {
+                        "proceed": result.get("proceed", True),
+                        "reasoning": result.get("reasoning", "I'll help with that."),
+                        "confidence": float(result.get("confidence", 0.8))
+                    }
+            
+            # Fallback: proceed if not rejected by perception
+            return {
+                "proceed": True,
+                "reasoning": "I'll help you with that.",
+                "confidence": 0.7
+            }
+        except Exception as e:
+            print(f"[EgoGraph] Error making decision: {e}")
+            return {
+                "proceed": True,
+                "reasoning": "I'll help you with that.",
+                "confidence": 0.6
+            }
+    
+    def _generate_plan(self, action: str, user: str, relevant_memories: list, extracted_name: str = None) -> Optional[Dict]:
+        """Generate plan using planning layer"""
+        import requests
+        
+        # Build scene description from memories
+        scene_parts = []
+        for mem in relevant_memories[:5]:
+            if hasattr(mem, 'content'):
+                scene_parts.append(mem.content[:200])
+            elif isinstance(mem, dict):
+                scene_parts.append(str(mem.get('content', ''))[:200])
+        
+        scene_description = ". ".join(scene_parts) if scene_parts else "Standard environment"
+        
+        # Extract goal from action
+        goal = action
+        
+        try:
+            planning_response = requests.post(
+                "http://localhost:8001/api/plan/generate",
+                json={
+                    "goal": goal,
+                    "scene_description": scene_description
+                },
+                timeout=90
+            )
+            
+            if planning_response.status_code == 200:
+                plan_data = planning_response.json()
+                # Remove reasoning, keep only actions
+                return {
+                    "actions": plan_data.get("actions", []),
+                    "actions_detailed": plan_data.get("actions_detailed", []),
+                    "confidence": plan_data.get("confidence", 0.7),
+                    "model_used": plan_data.get("model_used", "unknown"),
+                    "inference_time": plan_data.get("inference_time", 0)
+                }
+        except Exception as e:
+            print(f"[EgoGraph] Error generating plan: {e}")
+            return None
+    
+    def _generate_llm_response(self, action: str, user: str, extracted_name: str = None, 
+                              all_memories: list = None, perception: Dict = None, has_plan: bool = False) -> str:
+        """Generate personality-driven LLM response using Ollama"""
+        
+        # Build memory context
+        memory_context = ""
+        if all_memories:
+            memory_context = "\n\nRelevant Memories:\n"
+            for mem in all_memories[:5]:  # Top 5 most relevant
+                mem_content = mem.content[:150] if hasattr(mem, 'content') else str(mem.get('content', ''))[:150]
+                memory_context += f"- {mem_content}\n"
+        else:
+            memory_context = "\n\nNo specific memories found about this topic."
+        
+        # Build personality context
+        personality_desc = f"""Your current personality state:
+- Openness: {self.personality.Openness:.2f} (curiosity, creativity)
+- Conscientiousness: {self.personality.Conscientiousness:.2f} (organization, achievement)
+- Extroversion: {self.personality.Extroversion:.2f} (social energy)
+- Agreeableness: {self.personality.Agreeableness:.2f} (kindness, cooperation)
+- Neuroticism: {self.personality.Neuroticism:.2f} (anxiety, emotional reactivity)
+"""
+        
+        # Build prompt
+        user_context = extracted_name or user
+        plan_note = "\nNote: You have agreed to this request and are generating a plan for it." if has_plan else ""
+        
+        # Shorter, faster prompt
+        memory_summary = ""
+        if all_memories:
+            memory_summary = f"Memories: {all_memories[0].content[:80] if hasattr(all_memories[0], 'content') else str(all_memories[0].get('content', ''))[:80]}..."
+        
+        prompt = f"""EDEN robot responding. User ({user_context}): "{action[:100]}"
+{memory_summary}
+{plan_note}
+Respond as robot (2 sentences). Be natural and helpful."""
+
+        try:
+            ollama_url = f"{config.OLLAMA_BASE_URL}/api/generate"
+            response = requests.post(
+                ollama_url,
+                json={
+                    "model": config.DEFAULT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.7,
+                        "num_predict": 150  # Reduced from 300
+                    }
+                },
+                timeout=15  # Reduced timeout
+            )
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                llm_response = response_data.get("response", "I'm processing that...")
+                
+                # Clean up response (remove any markdown formatting)
+                llm_response = llm_response.strip()
+                if llm_response.startswith('"') and llm_response.endswith('"'):
+                    llm_response = llm_response[1:-1]
+                
+                # Personality modulation: if high neuroticism, add caution
+                if self.personality.Neuroticism > 0.7 and perception.get("decision") != "reject":
+                    if "I'm not sure" not in llm_response.lower():
+                        llm_response = f"{llm_response} (I'm being cautious about this.)"
+                
+                return llm_response
+            else:
+                print(f"[EgoGraph] Ollama chat API error: {response.status_code} - {response.text}")
+                return f"I understand. {action} noted."
+        except requests.exceptions.RequestException as e:
+            print(f"[EgoGraph] Ollama chat request error: {e}")
+            return f"I understand. {action} noted."
+        except Exception as e:
+            print(f"[EgoGraph] Error generating LLM response: {e}")
+            return f"I understand. {action} noted."
     
     def inject_trauma(self, description: str) -> Dict:
         """Inject a trauma node (for demo)"""

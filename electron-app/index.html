@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDEN Cognitive Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Custom Title Bar -->
+    <div class="title-bar">
+        <div class="title-bar-drag">
+            <div class="title-icon">🧠</div>
+            <span class="title-text">EDEN Cognitive Dashboard</span>
+        </div>
+        <div class="title-bar-controls">
+            <button class="title-bar-button" id="minimize-btn" title="Minimize">
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                    <rect x="0" y="5" width="12" height="2" fill="currentColor"/>
+                </svg>
+            </button>
+            <button class="title-bar-button" id="maximize-btn" title="Maximize">
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                    <rect x="0" y="0" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+            </button>
+            <button class="title-bar-button close" id="close-btn" title="Close">
+                <svg width="12" height="12" viewBox="0 0 12 12">
+                    <path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2>EDEN</h2>
+                <div class="status-indicator" id="connection-status">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Connecting...</span>
+                </div>
+            </div>
+            
+            <div class="nav-tabs">
+                <button class="nav-tab active" data-tab="graph">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 2 L12 22 M2 12 L22 12"/>
+                    </svg>
+                    <span>Knowledge Graph</span>
+                </button>
+                
+                <button class="nav-tab" data-tab="interact">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <span>Interact</span>
+                </button>
+                
+                
+                <button class="nav-tab" data-tab="personality">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                    <span>Personality</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Knowledge Graph Tab -->
+            <div class="tab-content active" id="graph-tab">
+                <div class="tab-header">
+                    <h1>Knowledge Graph</h1>
+                    <div class="graph-stats" id="graph-stats">
+                        <span>Nodes: <strong id="node-count">0</strong></span>
+                        <span>Edges: <strong id="edge-count">0</strong></span>
+                    </div>
+                </div>
+                <div class="graph-container">
+                    <div id="graph-visualization"></div>
+                    <div class="graph-controls">
+                        <button class="btn-secondary" id="refresh-graph">Refresh</button>
+                        <button class="btn-secondary" id="reset-camera">Reset View</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Interact Tab -->
+            <div class="tab-content" id="interact-tab">
+                <div class="tab-header">
+                    <h1>Interact with EDEN</h1>
+                </div>
+                <div class="current-user-indicator" id="current-user-indicator" style="display: none;">
+                    <span class="indicator-label">EDEN IS CURRENTLY...</span>
+                    <span class="indicator-value" id="current-user-name">User</span>
+                </div>
+                <div class="chat-container">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="message system">
+                            <div class="message-content">
+                                <p>Welcome! Ask EDEN questions or request actions. The cognitive layer will use its memory to respond.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="chat-input-container">
+                        <input 
+                            type="text" 
+                            id="chat-input" 
+                            class="chat-input" 
+                            placeholder="Ask EDEN something or request an action..."
+                            autocomplete="off"
+                        />
+                        <button class="btn-primary" id="send-btn">Send</button>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- Personality Tab -->
+            <div class="tab-content" id="personality-tab">
+                <div class="tab-header">
+                    <h1>⚡ GOD MODE ⚡</h1>
+                    <p class="subtitle">Adjust EDEN's personality traits in real-time</p>
+                </div>
+                <div class="personality-container">
+                    <div class="personality-sliders" id="personality-sliders">
+                        <!-- Sliders will be generated by JS -->
+                    </div>
+                    <div class="personality-actions">
+                        <button class="btn-danger" id="inject-trauma-btn">⚠️ Inject Trauma</button>
+                        <button class="btn-success" id="inject-kindness-btn">✨ Inject Kindness</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/3d-force-graph@1.70.10/dist/3d-force-graph.min.js"></script>
+    <script>
+        // Check if library loaded
+        window.addEventListener('load', () => {
+            if (typeof ForceGraph3D === 'undefined') {
+                console.error('3D Force Graph library failed to load!');
+                document.getElementById('graph-visualization').innerHTML = 
+                    '<div style="color: white; padding: 20px;">Error: Could not load 3D Force Graph library. Check internet connection.</div>';
+            }
+        });
+    </script>
+    <script src="app.js"></script>
+</body>
+</html>
+

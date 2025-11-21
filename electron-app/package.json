@@ -1,0 +1,42 @@
+{
+  "name": "eden-cognitive-dashboard",
+  "version": "1.0.0",
+  "description": "EDEN Cognitive Layer Desktop Dashboard",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --disable-gpu-sandbox 2>/dev/null || electron . --disable-gpu-sandbox",
+    "dev": "electron . --dev --disable-gpu-sandbox",
+    "build": "electron-builder"
+  },
+  "keywords": ["eden", "robotics", "cognitive", "dashboard"],
+  "author": "EDEN Robotics",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "build": {
+    "appId": "com.edenrobotics.cognitive",
+    "productName": "EDEN Cognitive Dashboard",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  }
+}
+

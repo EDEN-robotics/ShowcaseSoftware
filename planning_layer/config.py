@@ -15,8 +15,8 @@ ENFORCE_EAGER = True  # Save memory on consumer cards
 TRUST_REMOTE_CODE = True
 
 # Inference Settings
-TEMPERATURE = 0.1  # Low temperature for deterministic physics reasoning
-MAX_TOKENS = 256  # Maximum tokens in response (reduced for faster inference)
+TEMPERATURE = 0.2  # Slightly higher for better reasoning (still deterministic)
+MAX_TOKENS = 512  # Increased for more detailed plans with better models
 TOP_P = 0.9
 TOP_K = 50
 
@@ -27,9 +27,14 @@ MAX_PLANNING_HISTORY = 10  # Keep last N planning requests in memory
 
 # Ollama Fallback Settings
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "llama3"  # Fallback model (llama3 or mistral)
-OLLAMA_TIMEOUT = 60  # seconds (increased for slower systems)
-USE_OLLAMA_FALLBACK = True  # Enable Ollama fallback
+# Better models for planning (in order of preference):
+# - llama3.1:8b (better reasoning than llama3)
+# - qwen2.5:7b (excellent reasoning, smaller)
+# - mistral:7b (good balance)
+# - deepseek-r1:7b (best reasoning, if available)
+OLLAMA_MODEL = "llama3.1"  # Upgraded to better reasoning model (or "qwen2.5", "mistral")
+OLLAMA_TIMEOUT = 90  # seconds (increased for better models)
+USE_OLLAMA_FALLBACK = True  # Enable Ollama fallback (primary now)
 
 # Performance Settings
 INFERENCE_TIMEOUT = 30  # seconds - if Cosmos takes longer, use Ollama

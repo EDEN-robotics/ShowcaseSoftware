@@ -105,7 +105,7 @@ async def set_personality(update: PersonalityUpdate):
 
 @app.post("/api/interact")
 async def interact(request: InteractionRequest):
-    """Process an interaction and return thought trace"""
+    """Process an interaction and return thought trace, decision, plan, and memory updates"""
     result = ego_graph.process_interaction(request.user, request.action)
     
     # Broadcast graph update

@@ -67,3 +67,8 @@ models/
 *.ckpt
 *.safetensors
 
+# Electron/Node
+electron-app/node_modules/
+electron-app/dist/
+electron-app/*.log
+

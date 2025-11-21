@@ -234,7 +234,6 @@ Answer format: <think>...</think> <answer>...</answer>
             
             return {
                 "actions": actions,
-                "reasoning": reasoning,
                 "confidence": confidence,
                 "model_used": "cosmos",
                 "inference_time": inference_time,
